@@ -40,8 +40,9 @@ def clean_val(x):
     try: return float(s)
     except: return 0.0
 
-# 제외할 키워드 (헤더 등)
-exclude_list = ["TOTAL", "TROY OUNCE", "DEPOSITORY", "REPORT DATE", "ACTIVITY DATE", "NAN", "NEW YORK", "COMEX"]
+# [수정 1] "DEPOSITORY"를 제외 목록에서 제거 (창고 이름에 포함될 수 있으므로)
+# "TOTAL"은 합계 행을 피하기 위해 유지
+exclude_list = ["TOTAL", "TROY OUNCE", "REPORT DATE", "ACTIVITY DATE", "NAN", "NEW YORK", "COMEX"]
 
 print("\n--- [2단계] 데이터 추출 및 창고명 탐색 시작 ---")
 
@@ -69,12 +70,15 @@ for index, row in df_raw.iterrows():
     if not is_platinum:
         continue
 
+    # [수정 2] 찐 헤더인 "DEPOSITORY" 단어만 정확히 일치할 때 건너뛰기
+    if first_val.upper() == "DEPOSITORY":
+        continue
+
     # C. 데이터 추출 로직
     # 1) 'Registered' 또는 'Eligible' 행 처리
     if first_val in ["Registered", "Eligible"]:
         if not temp_depository:
-            # 창고명이 아직 없으면 스킵 (하지만 이유는 출력)
-            # print(f"  [Skip] 창고명 미확인 상태에서 데이터 발견: {first_val}")
+            # 창고명이 아직 없으면 스킵
             continue
             
         try:
@@ -94,6 +98,7 @@ for index, row in df_raw.iterrows():
     # 2) 창고명(Depository) 찾기
     # 조건: 'nan' 아님, 3글자 이상, 제외키워드 없음, 'Registered' 아님
     elif first_val != "nan" and len(first_val) > 3:
+        # 제외 키워드(exclude_list)에 포함된 단어가 있으면 스킵
         if not any(k in first_val.upper() for k in exclude_list):
             # 숫자가 포함되지 않은 텍스트를 창고명으로 간주
             if not any(char.isdigit() for char in first_val):
