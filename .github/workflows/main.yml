@@ -1,12 +1,8 @@
 name: Daily Platinum Stock Update
 
-# 언제 실행할지 설정
 on:
   schedule:
-    # UTC 기준 22:00 (한국 시간 다음 날 오전 7:00)
-    # 월~금요일(평일)에만 실행하도록 설정 (1-5)
     - cron: '0 22 * * 1-5'
-  # 수동으로 실행 버튼을 눌러서 테스트할 수 있게 함
   workflow_dispatch:
 
 permissions:
@@ -17,35 +13,29 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1. 저장소의 코드를 가상 컴퓨터로 가져옵니다.
       - name: Checkout code
         uses: actions/checkout@v3
 
-      # 2. 파이썬 환경을 설치합니다.
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.9'
 
-      # 3. 필요한 라이브러리(pandas 등)를 설치합니다.
       - name: Install dependencies
         run: |
-          pip install -r requirements.txt
+          pip install pandas requests xlrd openpyxl lxml
 
-      # 4. 파이썬 코드를 실행합니다. (파일명이 main.py가 아니라면 수정 필요)
       - name: Run script
         run: python main.py
 
-      # 5. 결과 파일(csv)이 생기면 저장소에 다시 업로드(Commit & Push)합니다.
-     - name: Commit and push changes
+      - name: Commit and push changes
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          # 파일이 존재하는지 확인하고 있을 때만 add를 수행합니다.
           if [ -f platinum_daily_stock.csv ]; then
             git add platinum_daily_stock.csv
             git commit -m "Update daily platinum stock data" || echo "No changes to commit"
             git push
           else
-            echo "파일이 생성되지 않아 push를 건너뜁니다."
+            echo "파일이 생성되지 않았습니다."
           fi
