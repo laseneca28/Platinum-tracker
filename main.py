@@ -85,16 +85,20 @@ for _, row in df_raw.iterrows():
 # 3. 중복 체크 및 파일 저장
 file_name = 'platinum_daily_stock.csv'
 
+# (main.py의 3번 저장 부분만 아래로 교체해 보세요)
 if data_rows:
     new_df = pd.DataFrame(data_rows)
+    file_name = 'platinum_daily_stock.csv'
     
     if os.path.exists(file_name):
         existing_df = pd.read_csv(file_name)
+        # 테스트를 위해 중복 체크를 하지 않고 일단 합쳐봅니다.
+        final_df = pd.concat([existing_df, new_df], ignore_index=True).drop_duplicates(subset=['Date', 'Region_Type'], keep='last')
+    else:
+        final_df = new_df
         
-        # 만약 기존 파일에 현재 activity_date가 이미 존재한다면 저장하지 않고 종료
-        if activity_date in existing_df['Date'].astype(str).values:
-            print(f"알림: {activity_date} 날짜의 데이터가 이미 존재합니다. 저장을 건너뜁니다.")
-            sys.exit(0) # 성공으로 간주하되 프로세스 종료
-        
-        # 존재하지 않는 새로운 날짜일 경우에만 병합
-        final_df = pd
+    final_df.to_csv(file_name, index=False, encoding='utf-8-sig')
+    print(f"성공: {activity_date} 데이터 저장 완료")
+else:
+    print("데이터를 추출하지 못했습니다.")
+    sys.exit(1)
