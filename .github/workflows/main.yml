@@ -13,3 +13,37 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install dependencies
+        run: |
+          pip install pandas requests xlrd openpyxl lxml html5lib beautifulsoup4
+
+      - name: Run script
+        run: python main.py
+
+      - name: Commit and push changes
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # 파일이 생겼는지 확인하고 추가
+          if [ -f platinum_daily_stock.csv ]; then
+            git add platinum_daily_stock.csv
+            
+            # 변경사항이 있을 때만 커밋하고 푸시
+            if git diff --staged --quiet; then
+              echo "업데이트할 내용이 없습니다."
+            else
+              git commit -m "Add/Update daily platinum stock data"
+              git push
+            fi
+          else
+            echo "파일이 생성되지 않았습니다."
+          fi
