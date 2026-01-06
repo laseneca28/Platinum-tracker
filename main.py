@@ -4,83 +4,69 @@ import io
 import os
 import re
 import sys
+from datetime import datetime
 
-# 1. 파일 다운로드 및 설정
+# ---------------------------------------------------------
+# [설정] 엑셀 라이브러리 확인
+# ---------------------------------------------------------
+try:
+    import openpyxl
+except ImportError:
+    print("!!! 경고: 'openpyxl' 라이브러리가 필요합니다. (pip install openpyxl)")
+    sys.exit(1)
+
+# ---------------------------------------------------------
+# 1. 파일 다운로드 및 기본 데이터 수집 (기존과 동일)
+# ---------------------------------------------------------
 url = "https://www.cmegroup.com/delivery_reports/PA-PL_Stck_Rprt.xls"
 headers = {"User-Agent": "Mozilla/5.0"}
 
-print("--- [1단계] 데이터 다운로드 시작 ---")
+print("--- [1단계] 데이터 다운로드 및 처리 ---")
+# ... (다운로드 및 파싱 로직은 위와 동일하게 수행된다고 가정하고 핵심 로직으로 넘어갑니다) ...
+# 전체 코드를 복사해서 쓰실 수 있도록 다운로드 부분도 포함합니다.
+
 try:
     response = requests.get(url, headers=headers)
     response.raise_for_status()
     raw_data = response.content.decode('utf-8', errors='ignore')
-    
-    # 엔진 시도: HTML -> Excel 순서
     try:
         dfs = pd.read_html(io.StringIO(raw_data))
         df_raw = dfs[0]
-        print("성공: HTML 형식으로 데이터를 읽었습니다.")
     except:
         df_raw = pd.read_excel(io.BytesIO(response.content), engine='xlrd')
-        print("성공: Excel 엔진으로 데이터를 읽었습니다.")
-
 except Exception as e:
-    print(f"오류: 다운로드 또는 파싱 실패 - {e}")
+    print(f"오류: {e}")
     sys.exit(1)
 
-# 2. 데이터 추출 로직
 data_rows = []
 activity_date = None
 temp_depository = "" 
 is_platinum = False
+exclude_list = ["TOTAL", "TROY OUNCE", "REPORT DATE", "ACTIVITY DATE", "NAN", "NEW YORK", "COMEX"]
 
-# 수치 데이터 클리닝 함수
 def clean_val(x):
     s = str(x).replace(',', '').replace('nan', '0').replace('None', '0')
     try: return float(s)
     except: return 0.0
 
-# [수정 1] "DEPOSITORY"를 제외 목록에서 제거 (창고 이름에 포함될 수 있으므로)
-# "TOTAL"은 합계 행을 피하기 위해 유지
-exclude_list = ["TOTAL", "TROY OUNCE", "REPORT DATE", "ACTIVITY DATE", "NAN", "NEW YORK", "COMEX"]
-
-print("\n--- [2단계] 데이터 추출 및 창고명 탐색 시작 ---")
-
 for index, row in df_raw.iterrows():
     vals = [str(v).strip() for v in row.values]
-    first_val = vals[0] # 첫 번째 컬럼 값
+    first_val = vals[0]
 
-    # A. 날짜 추출
     if not activity_date:
-        combined_row = " ".join(vals)
-        match = re.search(r'Activity Date:\s*(\d{1,2}/\d{1,2}/\d{4})', combined_row)
-        if match:
-            activity_date = match.group(1)
-            print(f"-> 기준 날짜 확인: {activity_date}")
+        match = re.search(r'Activity Date:\s*(\d{1,2}/\d{1,2}/\d{4})', " ".join(vals))
+        if match: activity_date = match.group(1)
 
-    # B. PLATINUM 섹션 확인
     if "PLATINUM" in first_val.upper():
         is_platinum = True
-        print("-> PLATINUM 섹션 진입")
         continue
     if "PALLADIUM" in first_val.upper():
-        print("-> PALLADIUM 섹션 도달 (종료)")
         break 
+    if not is_platinum: continue
+    if first_val.upper() == "DEPOSITORY": continue
 
-    if not is_platinum:
-        continue
-
-    # [수정 2] 찐 헤더인 "DEPOSITORY" 단어만 정확히 일치할 때 건너뛰기
-    if first_val.upper() == "DEPOSITORY":
-        continue
-
-    # C. 데이터 추출 로직
-    # 1) 'Registered' 또는 'Eligible' 행 처리
     if first_val in ["Registered", "Eligible"]:
-        if not temp_depository:
-            # 창고명이 아직 없으면 스킵
-            continue
-            
+        if not temp_depository: continue
         try:
             data_rows.append({
                 'Date': activity_date,
@@ -92,47 +78,112 @@ for index, row in df_raw.iterrows():
                 'ADJUSTMENT': clean_val(row.iloc[6]),
                 'TOTAL_TODAY': clean_val(row.iloc[7])
             })
-        except:
-            continue
-
-    # 2) 창고명(Depository) 찾기
-    # 조건: 'nan' 아님, 3글자 이상, 제외키워드 없음, 'Registered' 아님
+        except: continue
     elif first_val != "nan" and len(first_val) > 3:
-        # 제외 키워드(exclude_list)에 포함된 단어가 있으면 스킵
         if not any(k in first_val.upper() for k in exclude_list):
-            # 숫자가 포함되지 않은 텍스트를 창고명으로 간주
             if not any(char.isdigit() for char in first_val):
                 temp_depository = first_val
-                print(f"-> [창고 발견] {temp_depository}")
 
-# 3. 저장 로직
-print("\n--- [3단계] 파일 저장 시도 ---")
-file_name = 'platinum_daily_stock.csv'
+# ---------------------------------------------------------
+# 2. 데이터 병합 및 월간 통계 생성 (핵심 추가 부분)
+# ---------------------------------------------------------
+print("\n--- [2단계] 데이터 병합 및 월간 통계 계산 ---")
+excel_file = 'platinum_daily_report.xlsx'
 
 if data_rows:
     new_df = pd.DataFrame(data_rows)
-    
-    # 합계(TOTAL) 행 제거 (대소문자 무시 옵션 추가하여 오류 방지)
     new_df = new_df[~new_df['Region_Type'].str.contains("TOTAL", case=False, na=False)]
     
-    print(f"-> 추출된 데이터: 총 {len(new_df)}행")
+    # 2-1. 기존 데이터 로드 (History 병합)
+    full_df = new_df
+    if os.path.exists(excel_file):
+        try:
+            existing_df = pd.read_excel(excel_file, sheet_name='Daily_Data')
+            # 날짜 형식 통일 (문자열 -> 날짜객체)
+            existing_df['Date'] = pd.to_datetime(existing_df['Date'])
+            new_df['Date'] = pd.to_datetime(new_df['Date'])
+            
+            # 오늘 날짜가 없으면 추가
+            current_date = pd.to_datetime(activity_date)
+            if current_date not in existing_df['Date'].values:
+                full_df = pd.concat([existing_df, new_df], ignore_index=True)
+                print(f"-> 기존 데이터에 {activity_date} 추가 완료")
+            else:
+                full_df = existing_df
+                print(f"-> {activity_date} 데이터가 이미 존재하여 기존 데이터를 사용합니다.")
+        except:
+            full_df = new_df
 
-    if os.path.exists(file_name):
-        existing_df = pd.read_csv(file_name)
-        if str(activity_date) in existing_df['Date'].astype(str).values:
-            print(f"알림: {activity_date} 데이터는 이미 파일에 존재합니다. 저장을 건너뜁니다.")
-        else:
-            final_df = pd.concat([existing_df, new_df], ignore_index=True)
-            final_df.to_csv(file_name, index=False, encoding='utf-8-sig')
-            print(f"성공: 기존 파일에 {activity_date} 데이터를 추가했습니다.")
-    else:
-        new_df.to_csv(file_name, index=False, encoding='utf-8-sig')
-        print(f"성공: 새 파일({file_name})을 생성했습니다.")
+    # 2-2. 월별 그룹화 (Monthly Stats)
+    # 날짜 컬럼을 Datetime으로 변환
+    full_df['Date'] = pd.to_datetime(full_df['Date'])
+    full_df['YearMonth'] = full_df['Date'].dt.to_period('M') # 예: 2026-01
+
+    # (A) 각 항목(Region_Type)별 월간 합계
+    # RECEIVED, WITHDRAWN은 '합계(Sum)', TOTAL_TODAY는 '월말잔고(Last)'를 구해야 함
+    monthly_details = full_df.groupby(['YearMonth', 'Region_Type']).agg({
+        'RECEIVED': 'sum',
+        'WITHDRAWN': 'sum',
+        'TOTAL_TODAY': 'last'  # 그 달의 마지막 기록을 재고로 간주
+    }).reset_index()
+
+    # (B) Registered / Eligible 구분 및 전체 합계 계산
+    # Region_Type에서 Status 추출
+    pattern = r'^(.*)\s+(Registered|Eligible)$'
+    monthly_details[['Depository', 'Status']] = monthly_details['Region_Type'].str.extract(pattern)
+    
+    # 월별, 상태별(Registered/Eligible) 총 재고 합계 (Grand Total)
+    monthly_grand_total = monthly_details.groupby(['YearMonth', 'Status'])['TOTAL_TODAY'].sum().reset_index()
+    
+    # 보기 좋게 피벗 (행: 월, 열: 상태, 값: 재고합계)
+    grand_total_pivot = monthly_grand_total.pivot(index='YearMonth', columns='Status', values='TOTAL_TODAY').reset_index()
+    grand_total_pivot['Grand_Total'] = grand_total_pivot.get('Registered', 0) + grand_total_pivot.get('Eligible', 0)
+    
+    # 최신순 정렬
+    grand_total_pivot = grand_total_pivot.sort_values(by='YearMonth', ascending=False)
+    monthly_details = monthly_details.sort_values(by=['YearMonth', 'Region_Type'], ascending=[False, True])
+
+    print("\n[월간 요약 미리보기 - Grand Total]")
+    print(grand_total_pivot.head())
+
+    # ---------------------------------------------------------
+    # 3. 엑셀 저장 (시트 3개: Daily / Summary / Monthly)
+    # ---------------------------------------------------------
+    print("\n--- [3단계] 엑셀 파일 저장 ---")
+    
+    # 저장 전 날짜 컬럼 문자열로 변환 (엑셀 호환성)
+    full_df['YearMonth'] = full_df['YearMonth'].astype(str)
+    monthly_details['YearMonth'] = monthly_details['YearMonth'].astype(str)
+    grand_total_pivot['YearMonth'] = grand_total_pivot['YearMonth'].astype(str)
+
+    # 당일 요약용 (기존 기능)
+    summary_prep = new_df.copy()
+    summary_prep[['Depository', 'Status']] = summary_prep['Region_Type'].str.extract(pattern)
+    summary_day = summary_prep.pivot_table(index='Depository', columns='Status', values='TOTAL_TODAY', aggfunc='sum', fill_value=0)
+    if 'Registered' not in summary_day.columns: summary_day['Registered'] = 0
+    if 'Eligible' not in summary_day.columns: summary_day['Eligible'] = 0
+    summary_day['Total_Stock'] = summary_day['Registered'] + summary_day['Eligible']
+
+    with pd.ExcelWriter(excel_file, engine='openpyxl') as writer:
+        # 시트 1: 전체 일별 데이터
+        full_df.drop(columns=['YearMonth'], errors='ignore').to_excel(writer, sheet_name='Daily_Data', index=False)
         
-    # 결과 미리보기
-    if not new_df.empty:
-        print("\n[저장된 데이터 예시]")
-        print(new_df[['Date', 'Region_Type', 'TOTAL_TODAY']].head())
+        # 시트 2: 오늘 기준 창고별 요약
+        summary_day.to_excel(writer, sheet_name='Today_Summary')
+        
+        # 시트 3: 월간 통계 (Grand Total + 상세)
+        # (1) Grand Total 먼저 쓰기
+        grand_total_pivot.to_excel(writer, sheet_name='Monthly_Stats', startrow=0, index=False)
+        
+        # (2) 한 칸 띄우고 상세 내역 쓰기
+        start_row = len(grand_total_pivot) + 4
+        writer.sheets['Monthly_Stats'].cell(row=start_row, column=1).value = ">>> [상세] 창고별 월간 입출고 및 기말 재고"
+        monthly_details[['YearMonth', 'Region_Type', 'RECEIVED', 'WITHDRAWN', 'TOTAL_TODAY']].to_excel(
+            writer, sheet_name='Monthly_Stats', startrow=start_row, index=False
+        )
+
+    print(f"성공: {excel_file} 저장 완료.")
+    print(" -> 'Monthly_Stats' 시트에서 월간 합계 및 Registered/Eligible 총계를 확인하세요.")
+
 else:
-    print("실패: 유효한 데이터를 하나도 찾지 못했습니다.")
-    print("-> 원인: 엑셀 파일 형식이 변경되었거나, 창고 이름을 인식하지 못했습니다.")
+    print("실패: 처리할 데이터가 없습니다.")
