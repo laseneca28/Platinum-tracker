@@ -76,7 +76,7 @@ for _, row in df_raw.iterrows():
     # 1) 'Registered' 또는 'Eligible' 행을 만나면 데이터 저장 시도
     if first_val in ["Registered", "Eligible"]:
         
-        # [핵심 수정] 창고 이름(temp_depository)을 아직 못 찾았다면 저장하지 않고 건너뜀
+        # [핵심 로직] 창고 이름(temp_depository)을 아직 못 찾았다면 저장하지 않고 건너뜀
         if not temp_depository:
             continue
             
@@ -92,48 +92,7 @@ for _, row in df_raw.iterrows():
                 'TOTAL_TODAY': clean_val(row.iloc[7])
             })
         except Exception as e:
-            # 인덱스 에러 등 예외 발생 시 무시
             continue
 
     # 2) 창고명(Depository) 업데이트 로직
-    # 값이 있고, 길이가 3자 이상이며, 'Registered/Eligible'이 아닌 경우
-    elif first_val != "nan" and len(first_val) > 3:
-        # 제외 키워드가 포함되지 않았는지 확인
-        if not any(k in first_val.upper() for k in exclude_list):
-            # 숫자가 포함되지 않은 순수 텍스트(창고명)인 경우만 인정
-            if not any(char.isdigit() for char in first_val):
-                temp_depository = first_val
-                # print(f"창고 감지됨: {temp_depository}") # 디버깅용
-
-# 3. 저장 및 중복 방지 로직
-file_name = 'platinum_daily_stock.csv'
-
-if data_rows:
-    new_df = pd.DataFrame(data_rows)
-    
-    # 혹시 모를 중복 합계 행(TOTAL 포함)이 들어갔다면 제거
-    new_df = new_df[~new_df['Region_Type'].str.upper().contains("TOTAL", na=False)]
-
-    if os.path.exists(file_name):
-        existing_df = pd.read_csv(file_name)
-        
-        # 날짜 기준으로 이미 데이터가 있는지 확인 (문자열로 비교)
-        if str(activity_date) in existing_df['Date'].astype(str).values:
-            print(f"알림: {activity_date} 데이터는 이미 저장되어 있습니다. 종료합니다.")
-            sys.exit(0)
-            
-        final_df = pd.concat([existing_df, new_df], ignore_index=True)
-    else:
-        final_df = new_df
-    
-    # CSV 저장 (한글 깨짐 방지 utf-8-sig)
-    final_df.to_csv(file_name, index=False, encoding='utf-8-sig')
-    print(f"성공: {activity_date} 일자 데이터 {len(new_df)}건 저장 완료")
-    
-    # 결과 확인용 출력 (상위 5개)
-    print("\n[저장된 데이터 미리보기]")
-    print(new_df.head())
-
-else:
-    print("데이터 추출 실패: 유효한 데이터 행을 찾지 못했습니다.")
-    sys.exit(1)
+    # 값이 있고, 길이가 3자
