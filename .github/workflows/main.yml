@@ -37,11 +37,15 @@ jobs:
         run: python main.py
 
       # 5. 결과 파일(csv)이 생기면 저장소에 다시 업로드(Commit & Push)합니다.
-      - name: Commit and push changes
+     - name: Commit and push changes
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add platinum_daily_stock.csv
-          # 변동 사항이 있을 때만 커밋 (없으면 에러 없이 넘어감)
-          git commit -m "Update daily platinum stock data" || echo "No changes to commit"
-          git push
+          # 파일이 존재하는지 확인하고 있을 때만 add를 수행합니다.
+          if [ -f platinum_daily_stock.csv ]; then
+            git add platinum_daily_stock.csv
+            git commit -m "Update daily platinum stock data" || echo "No changes to commit"
+            git push
+          else
+            echo "파일이 생성되지 않아 push를 건너뜁니다."
+          fi
