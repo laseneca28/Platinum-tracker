@@ -21,9 +21,9 @@ jobs:
         with:
           python-version: '3.9'
 
-      - name: Install dependencies
+     - name: Install dependencies
         run: |
-          pip install pandas requests xlrd openpyxl lxml
+          pip install pandas requests xlrd openpyxl lxml html5lib
 
       - name: Run script
         run: python main.py
