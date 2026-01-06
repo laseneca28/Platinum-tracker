@@ -32,10 +32,14 @@ jobs:
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          if [ -f platinum_daily_stock.csv ]; then
-            git add platinum_daily_stock.csv
-            git commit -m "Update daily platinum stock data" || echo "No changes to commit"
-            git push
+          
+          # 파일이 생겼는지 강제로 확인하고 추가
+          git add platinum_daily_stock.csv || echo "파일이 없습니다."
+          
+          # 변경사항이 있을 때만 커밋하고 푸시
+          if git diff --staged --quiet; then
+            echo "업데이트할 내용이 없습니다."
           else
-            echo "파일이 생성되지 않았습니다."
+            git commit -m "Add/Update daily platinum stock data"
+            git push
           fi
