@@ -3,94 +3,98 @@ import requests
 import io
 import os
 import re
+import sys
 
-# 1. 파일 다운로드 (브라우저인 척 하기)
+# 1. 파일 다운로드
 url = "https://www.cmegroup.com/delivery_reports/PA-PL_Stck_Rprt.xls"
 headers = {"User-Agent": "Mozilla/5.0"}
 
 try:
     response = requests.get(url, headers=headers)
     response.raise_for_status()
-    
-    # CME .xls는 실제로는 HTML 테이블인 경우가 많으므로 두 방식 모두 시도
     try:
-        # 먼저 HTML 테이블로 읽기 시도
         dfs = pd.read_html(io.BytesIO(response.content))
         df_raw = dfs[0]
-        print("HTML 형식으로 데이터를 읽었습니다.")
     except:
-        # 실패하면 일반 엑셀로 읽기
         df_raw = pd.read_excel(io.BytesIO(response.content))
-        print("Excel 형식으로 데이터를 읽었습니다.")
 except Exception as e:
-    print(f"다운로드 오류: {e}")
-    exit(1)
+    print(f"오류: {e}")
+    sys.exit(1)
 
-# 2. 데이터 처리
+# 2. 데이터 추출 로직
 data_rows = []
-report_date = None
-current_depository = None
+activity_date = None
+current_depository = "Unknown"
 is_platinum = False
 
+# 행 순회
 for _, row in df_raw.iterrows():
-    # 모든 셀을 문자열로 변환하여 리스트화
     vals = [str(v).strip() for v in row.values]
-    first_val = vals[0] if vals else ""
+    first_val = vals[0] if vals else "nan"
 
-    # 날짜 찾기
-    if not report_date:
+    # A. Activity Date 찾기 (리포트 상단의 Activity Date: MM/DD/YYYY 패턴)
+    if not activity_date:
         combined_row = " ".join(vals)
-        match = re.search(r'Report Date:\s*(\d{1,2}/\d{1,2}/\d{4})', combined_row)
+        match = re.search(r'Activity Date:\s*(\d{1,2}/\d{1,2}/\d{4})', combined_row)
         if match:
-            report_date = match.group(1)
+            activity_date = match.group(1)
+            print(f"확인된 Activity Date: {activity_date}")
 
-    # PLATINUM 섹션 시작/종료 감지
+    # B. PLATINUM 섹션 범위 지정
     if "PLATINUM" in first_val.upper():
         is_platinum = True
         continue
-    if "PALLADIUM" in first_val.upper() or "TOTAL" == first_val.upper():
-        if is_platinum and "TOTAL" not in first_val.upper(): # 진짜 종료 지점
-            is_platinum = False
+    if "PALLADIUM" in first_val.upper():
+        is_platinum = False
+        break
 
-    if not is_platinum: continue
+    if not is_platinum:
+        continue
 
-    # 창고명 및 데이터 추출
+    # C. 데이터 필터링 및 추출
+    exclude_keywords = ["TOTAL REGISTERED", "TOTAL ELIGIBLE", "TOTAL TODAY", "TROY OUNCE", "DEPOSITORY", "TOTAL"]
+    
+    # Registered 또는 Eligible 행 처리
     if first_val in ["Registered", "Eligible"]:
-        if current_depository:
-            try:
-                # 숫자 정제 (쉼표 제거 등)
-                def to_f(x):
-                    s = str(x).replace(',', '').replace('nan', '0')
-                    return float(s) if s else 0.0
+        # 합계(Total)가 포함된 행은 제외 (한 번 더 검증)
+        if "TOTAL" in first_val.upper():
+            continue
+            
+        try:
+            def clean_val(x):
+                s = str(x).replace(',', '').replace('nan', '0').replace('None', '0')
+                return float(s) if s else 0.0
 
-                data_rows.append({
-                    'Date': report_date,
-                    'Region_Type': f"{current_depository} {first_val}",
-                    'PREV_TOTAL': to_f(row.iloc[2]),
-                    'RECEIVED': to_f(row.iloc[3]),
-                    'WITHDRAWN': to_f(row.iloc[4]),
-                    'NET_CHANGE': to_f(row.iloc[5]),
-                    'ADJUSTMENT': to_f(row.iloc[6]),
-                    'TOTAL_TODAY': to_f(row.iloc[7])
-                })
-            except: continue
-    elif first_val != "nan" and "DEPOSITORY" not in first_val.upper() and "TROY" not in first_val.upper():
-        if len(first_val) > 3: # 너무 짧은 글자는 무시 (창고 이름 저장)
-            current_depository = first_val
+            data_rows.append({
+                'Date': activity_date,
+                'Region_Type': f"{current_depository} {first_val}",
+                'PREV_TOTAL': clean_val(row.iloc[2]),
+                'RECEIVED': clean_val(row.iloc[3]),
+                'WITHDRAWN': clean_val(row.iloc[4]),
+                'NET_CHANGE': clean_val(row.iloc[5]),
+                'ADJUSTMENT': clean_val(row.iloc[6]),
+                'TOTAL_TODAY': clean_val(row.iloc[7])
+            })
+        except:
+            continue
+    
+    # 창고명 업데이트 (숫자가 아니고 유효한 텍스트일 때)
+    elif first_val != "nan" and len(first_val) > 2 and not any(k in first_val.upper() for k in exclude_keywords):
+        current_depository = first_val
 
-# 3. 저장 (데이터가 있을 때만 실행)
+# 3. 중복 체크 및 파일 저장
+file_name = 'platinum_daily_stock.csv'
+
 if data_rows:
     new_df = pd.DataFrame(data_rows)
-    file_name = 'platinum_daily_stock.csv'
     
     if os.path.exists(file_name):
-        old_df = pd.read_csv(file_name)
-        final_df = pd.concat([old_df, new_df]).drop_duplicates(subset=['Date', 'Region_Type'], keep='last')
-    else:
-        final_df = new_df
+        existing_df = pd.read_csv(file_name)
         
-    final_df.to_csv(file_name, index=False, encoding='utf-8-sig')
-    print(f"성공: {len(data_rows)}개의 데이터를 저장했습니다.")
-else:
-    print("실패: 추출된 데이터가 없습니다.")
-    exit(1) # 에러를 발생시켜서 로봇이 멈추게 함
+        # 만약 기존 파일에 현재 activity_date가 이미 존재한다면 저장하지 않고 종료
+        if activity_date in existing_df['Date'].astype(str).values:
+            print(f"알림: {activity_date} 날짜의 데이터가 이미 존재합니다. 저장을 건너뜁니다.")
+            sys.exit(0) # 성공으로 간주하되 프로세스 종료
+        
+        # 존재하지 않는 새로운 날짜일 경우에만 병합
+        final_df = pd
